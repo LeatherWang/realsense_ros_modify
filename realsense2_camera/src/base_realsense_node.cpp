@@ -14,6 +14,19 @@ using namespace ddynamic_reconfigure;
 #define OPTICAL_FRAME_ID(sip) (static_cast<std::ostringstream&&>(std::ostringstream() << "camera_" << STREAM_NAME(sip) << "_optical_frame")).str()
 #define ALIGNED_DEPTH_TO_FRAME_ID(sip) (static_cast<std::ostringstream&&>(std::ostringstream() << "camera_aligned_depth_to_" << STREAM_NAME(sip) << "_frame")).str()
 
+#define STAMP_DOMAIN_CHECK(frame_name)                                                              \
+    static rs2_timestamp_domain last_domain = frame.get_frame_timestamp_domain();                   \
+    ROS_WARN_STREAM_ONCE(frame_name << " stamp domain: "                                            \
+                         << rs2_timestamp_domain_to_string(frame.get_frame_timestamp_domain()));    \
+                                                                                                    \
+    if(last_domain != frame.get_frame_timestamp_domain())                                           \
+        ROS_ERROR_STREAM_THROTTLE(0.5, frame_name << " stamp domain have changed, last is: "        \
+                         << rs2_timestamp_domain_to_string(last_domain)                             \
+                         << ", cur is: "                                                            \
+                         << rs2_timestamp_domain_to_string(frame.get_frame_timestamp_domain()));    \
+    last_domain = frame.get_frame_timestamp_domain();
+
+
 SyncedImuPublisher::SyncedImuPublisher(ros::Publisher imu_publisher, std::size_t waiting_list_size):
             _publisher(imu_publisher), _pause_mode(false),
             _waiting_list_size(waiting_list_size)
@@ -84,7 +97,7 @@ BaseRealSenseNode::BaseRealSenseNode(ros::NodeHandle& nodeHandle,
     _pnh(privateNodeHandle), _dev(dev), _json_file_path(""),
     _serial_no(serial_no),
     _is_initialized_time_base(false),
-    _namespace(getNamespaceStr())
+    _namespace(getNamespaceStr())                                                       //初始化一些不变参数
 {
     // Types for depth stream
     _image_format[RS2_STREAM_DEPTH] = CV_16UC1;    // CVBridge type
@@ -193,21 +206,21 @@ void BaseRealSenseNode::setupErrorCallback()
     }
 }
 
-void BaseRealSenseNode::publishTopics()
+void BaseRealSenseNode::publishTopics()         // 起点
 {
     getParameters();
     setupDevice();
-    setupFilters();
-    registerDynamicReconfigCb(_node_handle);
+    setupFilters();     //!@todo
+    registerDynamicReconfigCb(_node_handle);    //配置动态参数管理器，并对用户的设置参数进行判断，以及设置参数改变时的回调函数
     setupErrorCallback();
-    enable_devices();
-    setupPublishers();
-    setupStreams();
-    SetBaseStream();
-    registerAutoExposureROIOptions(_node_handle);
-    publishStaticTransforms();
-    publishIntrinsics();
-    startMonitoring();
+    enable_devices();                           //根据用户对每个sip的配置参数，决定是否要使能该sip
+    setupPublishers();                          //配置sensor数据发布器、IMU同步机制、深度图跟其它stream的外参
+    setupStreams();                             //打开stream，更新标定参数camera_info
+    SetBaseStream();                            //设置base stream，用于后面tf时，作为基准
+    registerAutoExposureROIOptions(_node_handle);   //设置自动曝光ROI
+    publishStaticTransforms();                      //发布静态tf
+    publishIntrinsics();                            //发布imu内参
+    startMonitoring();                              //监视器，监视温度
     ROS_INFO_STREAM("RealSense Node Is Up!");
 }
 
@@ -400,24 +413,24 @@ void BaseRealSenseNode::registerAutoExposureROIOptions(ros::NodeHandle& nh)
 
 void BaseRealSenseNode::registerDynamicOption(ros::NodeHandle& nh, rs2::options sensor, std::string& module_name)
 {
-    ros::NodeHandle nh1(nh, module_name);
+    ros::NodeHandle nh1(nh, module_name);                               //!@attention module_name作为二级namespace
     std::shared_ptr<ddynamic_reconfigure::DDynamicReconfigure> ddynrec = std::make_shared<ddynamic_reconfigure::DDynamicReconfigure>(nh1);
     for (auto i = 0; i < RS2_OPTION_COUNT; i++)
     {
         rs2_option option = static_cast<rs2_option>(i);
         const std::string option_name(create_graph_resource_name(rs2_option_to_string(option)));
-        if (!sensor.supports(option) || sensor.is_option_read_only(option))
+        if (!sensor.supports(option) || sensor.is_option_read_only(option)) //先判断是否支持或者是只读参数
         {
             continue;
         }
         if (is_checkbox(sensor, option))
         {
-            auto option_value = bool(sensor.get_option(option));
-            if (nh1.param(option_name, option_value, option_value))
+            auto option_value = bool(sensor.get_option(option));        //先获取默认值
+            if (nh1.param(option_name, option_value, option_value))     //先从参数服务器中获取该参数，如果存在就赋值
             {
                 sensor.set_option(option, option_value);
             }
-            ddynrec->registerVariable<bool>(
+            ddynrec->registerVariable<bool>(                            //注册回调函数
               option_name, option_value,
               [option, sensor](bool new_value) { sensor.set_option(option, new_value); },
               sensor.get_option_description(option));
@@ -436,7 +449,7 @@ void BaseRealSenseNode::registerDynamicOption(ros::NodeHandle& nh, rs2::options 
                     ROS_WARN_STREAM("Param '" << nh1.resolveName(option_name) << "' has value " << option_value
                             << " outside the range [" << op_range.min << ", " << op_range.max
                             << "]. Using current sensor value " << sensor_option_value << " instead.");
-                    option_value = sensor_option_value;
+                    option_value = sensor_option_value;                         //如果超出范围，设回默认值
                 }
                 else
                 {
@@ -445,14 +458,14 @@ void BaseRealSenseNode::registerDynamicOption(ros::NodeHandle& nh, rs2::options 
             }
             if (is_int_option(sensor, option))
             {
-              ddynrec->registerVariable<int>(
+              ddynrec->registerVariable<int>(                                   //int类型
                   option_name, int(option_value),
                   [option, sensor](int new_value) { sensor.set_option(option, new_value); },
                   sensor.get_option_description(option), int(op_range.min), int(op_range.max));
             }
             else
             {
-                if (i == RS2_OPTION_DEPTH_UNITS)
+                if (i == RS2_OPTION_DEPTH_UNITS)                                //特殊情况特殊对待
                 {
                     if (ROS_DEPTH_SCALE >= op_range.min && ROS_DEPTH_SCALE <= op_range.max)
                     {
@@ -465,7 +478,7 @@ void BaseRealSenseNode::registerDynamicOption(ros::NodeHandle& nh, rs2::options 
                 }
                 else
                 {
-                  ddynrec->registerVariable<double>(
+                  ddynrec->registerVariable<double>(                            //double类型
                       option_name, option_value,
                       [option, sensor](double new_value) { sensor.set_option(option, new_value); },
                       sensor.get_option_description(option), double(op_range.min), double(op_range.max));
@@ -493,7 +506,7 @@ void BaseRealSenseNode::registerDynamicOption(ros::NodeHandle& nh, rs2::options 
                     sensor.set_option(option, option_value);
                 }
             }
-            ddynrec->registerEnumVariable<int>(
+            ddynrec->registerEnumVariable<int>(                                             //枚举类型
                 option_name, option_value,
                 [option, sensor](int new_value) { sensor.set_option(option, new_value); },
                 sensor.get_option_description(option), enum_dict);
@@ -556,14 +569,16 @@ void BaseRealSenseNode::getParameters()
     _pnh.param("tf_publish_rate", _tf_publish_rate, TF_PUBLISH_RATE);
 
     _pnh.param("enable_sync", _sync_frames, SYNC_FRAMES);
-    if (_pointcloud || _align_depth || _filters_str.size() > 0)
+    if (_pointcloud || _align_depth || _filters_str.size() > 0) {           //需要使能同步
         _sync_frames = true;
+        ROS_WARN_STREAM("enable_sync is enabled, image stamp will use ros time");
+    }
 
     _pnh.param("json_file_path", _json_file_path, std::string(""));
 
-    for (auto& stream : IMAGE_STREAMS)
+    for (auto& stream : IMAGE_STREAMS)                                      //按照image sensor类型获取对应的图像配置参数
     {
-        std::string param_name(_stream_name[stream.first] + "_width");
+        std::string param_name(_stream_name[stream.first] + "_width");      //每种sensor中所有的stream共用一套参数
         ROS_DEBUG_STREAM("reading parameter:" << param_name);
         _pnh.param(param_name, _width[stream], IMAGE_WIDTH);
         param_name = _stream_name[stream.first] + "_height";
@@ -577,7 +592,7 @@ void BaseRealSenseNode::getParameters()
         _pnh.param(param_name, _enable[stream], true);
     }
 
-    for (auto& stream : HID_STREAMS)
+    for (auto& stream : HID_STREAMS)                                        //获取accel、gyro和pose的配置参数
     {
         std::string param_name(_stream_name[stream.first] + "_fps");
         ROS_DEBUG_STREAM("reading parameter:" << param_name);
@@ -590,7 +605,7 @@ void BaseRealSenseNode::getParameters()
     _pnh.param("odom_frame_id", _odom_frame_id, DEFAULT_ODOM_FRAME_ID);
 
     std::vector<stream_index_pair> streams(IMAGE_STREAMS);
-    streams.insert(streams.end(), HID_STREAMS.begin(), HID_STREAMS.end());
+    streams.insert(streams.end(), HID_STREAMS.begin(), HID_STREAMS.end());  //获取每个sensor的frame_id和optical_frame_id
     for (auto& stream : streams)
     {
         std::string param_name(static_cast<std::ostringstream&&>(std::ostringstream() << STREAM_NAME(stream) << "_frame_id").str());
@@ -602,7 +617,7 @@ void BaseRealSenseNode::getParameters()
     }
 
     std::string unite_imu_method_str("");
-    _pnh.param("unite_imu_method", unite_imu_method_str, DEFAULT_UNITE_IMU_METHOD);
+    _pnh.param("unite_imu_method", unite_imu_method_str, DEFAULT_UNITE_IMU_METHOD);     //IMU归一化方式
     if (unite_imu_method_str == "linear_interpolation")
         _imu_sync_method = imu_sync_method::LINEAR_INTERPOLATION;
     else if (unite_imu_method_str == "copy")
@@ -610,12 +625,12 @@ void BaseRealSenseNode::getParameters()
     else
         _imu_sync_method = imu_sync_method::NONE;
 
-    if (_imu_sync_method > imu_sync_method::NONE)
+    if (_imu_sync_method > imu_sync_method::NONE)                                       //如果进行插值，则设置optical_frame_id
     {
         _pnh.param("imu_optical_frame_id", _optical_frame_id[GYRO], DEFAULT_IMU_OPTICAL_FRAME_ID);
     }
 
-    for (auto& stream : IMAGE_STREAMS)
+    for (auto& stream : IMAGE_STREAMS)                                                  //获取需要depth aligned的depth_aligned_frame_id
     {
         if (stream == DEPTH) continue;
         if (stream.second > 1) continue;
@@ -659,9 +674,10 @@ void BaseRealSenseNode::setupDevice()
         else
             ROS_INFO("JSON file is not provided");
 
+        printf("\n==========\n");
         ROS_INFO_STREAM("ROS Node Namespace: " << _namespace);
 
-        auto camera_name = _dev.get_info(RS2_CAMERA_INFO_NAME);
+        auto camera_name = _dev.get_info(RS2_CAMERA_INFO_NAME);             //打印相机模组的基本信息
         ROS_INFO_STREAM("Device Name: " << camera_name);
 
         ROS_INFO_STREAM("Device Serial No: " << _serial_no);
@@ -680,13 +696,13 @@ void BaseRealSenseNode::setupDevice()
         ROS_INFO_STREAM("Align Depth: " << ((_align_depth)?"On":"Off"));
         ROS_INFO_STREAM("Sync Mode: " << ((_sync_frames)?"On":"Off"));
 
-        _dev_sensors = _dev.query_sensors();
+        _dev_sensors = _dev.query_sensors();                                //查询该模组上的sensors
 
 
         std::function<void(rs2::frame)> frame_callback_function, imu_callback_function;
         if (_sync_frames)
         {
-            frame_callback_function = _syncer;
+            frame_callback_function = _syncer;                              //image frame同步回调
 
             auto frame_callback_inner = [this](rs2::frame frame){
                 frame_callback(frame);
@@ -704,17 +720,18 @@ void BaseRealSenseNode::setupDevice()
         }
         else
         {
-            imu_callback_function = [this](rs2::frame frame){imu_callback_sync(frame, _imu_sync_method);};
+            imu_callback_function = [this](rs2::frame frame){imu_callback_sync(frame, _imu_sync_method);};  //IMU sync回调
         }
         std::function<void(rs2::frame)> multiple_message_callback_function = [this](rs2::frame frame){multiple_message_callback(frame, _imu_sync_method);};
 
+        printf("\n==========\n");
         ROS_INFO_STREAM("Device Sensors: ");
-        for(auto&& sensor : _dev_sensors)
+        for(auto&& sensor : _dev_sensors)                                               //不同的sensor调用不同的回调函数
         {
-            for (auto& profile : sensor.get_stream_profiles())
+            for (auto& profile : sensor.get_stream_profiles())                          //查询该sensor支持的profile数目，如果是Stereo Module，它包含两个stream
             {
                 auto video_profile = profile.as<rs2::video_stream_profile>();
-                stream_index_pair sip(video_profile.stream_type(), video_profile.stream_index());
+                stream_index_pair sip(video_profile.stream_type(), video_profile.stream_index());   //构造sip
                 if (_sensors.find( sip ) != _sensors.end())
                     continue;
                 _sensors[sip] = sensor;
@@ -735,11 +752,11 @@ void BaseRealSenseNode::setupDevice()
             }
             else if (sensor.is<rs2::motion_sensor>())
             {
-                _sensors_callback[module_name] = imu_callback_function;
+                _sensors_callback[module_name] = imu_callback_function;                 //imu回调
             }
             else if (sensor.is<rs2::pose_sensor>())
             {
-                _sensors_callback[module_name] = multiple_message_callback_function;
+                _sensors_callback[module_name] = multiple_message_callback_function;    //pose回调
             }
             else
             {
@@ -751,7 +768,7 @@ void BaseRealSenseNode::setupDevice()
         }
 
         // Update "enable" map
-        for (std::pair<stream_index_pair, bool> const& enable : _enable )
+        for (std::pair<stream_index_pair, bool> const& enable : _enable )               //将不属于该模组的sip设置为失能
         {
             const stream_index_pair& stream_index(enable.first);
             if (enable.second && _sensors.find(stream_index) == _sensors.end())
@@ -775,6 +792,7 @@ void BaseRealSenseNode::setupDevice()
 
 void BaseRealSenseNode::setupPublishers()
 {
+    printf("\n==========\n");
     ROS_INFO("setupPublishers...");
     image_transport::ImageTransport image_transport(_node_handle);
 
@@ -784,18 +802,18 @@ void BaseRealSenseNode::setupPublishers()
         {
             std::stringstream image_raw, camera_info;
             bool rectified_image = false;
-            if (stream == DEPTH || stream == INFRA1 || stream == INFRA2)
+            if (stream == DEPTH || stream == INFRA1 || stream == INFRA2)                                    //深度和红外都是rectified的
                 rectified_image = true;
 
             std::string stream_name(STREAM_NAME(stream));
             image_raw << stream_name << "/image_" << ((rectified_image)?"rect_":"") << "raw";
             camera_info << stream_name << "/camera_info";
-
+                                                                                                            // 频率诊断器
             std::shared_ptr<FrequencyDiagnostics> frequency_diagnostics(new FrequencyDiagnostics(_fps[stream], stream_name, _serial_no));
             _image_publishers[stream] = {image_transport.advertise(image_raw.str(), 1), frequency_diagnostics};
             _info_publisher[stream] = _node_handle.advertise<sensor_msgs::CameraInfo>(camera_info.str(), 1);
 
-            if (_align_depth && (stream != DEPTH) && stream.second < 2)
+            if (_align_depth && (stream != DEPTH) && stream.second < 2)                                     //发布aligned，注意都aligned到了谁
             {
                 std::stringstream aligned_image_raw, aligned_camera_info;
                 aligned_image_raw << "aligned_depth_to_" << stream_name << "/image_raw";
@@ -807,19 +825,19 @@ void BaseRealSenseNode::setupPublishers()
                 _depth_aligned_info_publisher[stream] = _node_handle.advertise<sensor_msgs::CameraInfo>(aligned_camera_info.str(), 1);
             }
 
-            if (stream == DEPTH && _pointcloud)
+            if (stream == DEPTH && _pointcloud)                                                             //发布点云
             {
                 _pointcloud_publisher = _node_handle.advertise<sensor_msgs::PointCloud2>("depth/color/points", 1);
             }
         }
     }
 
-    _synced_imu_publisher = std::make_shared<SyncedImuPublisher>();
+    _synced_imu_publisher = std::make_shared<SyncedImuPublisher>();                                         //IMU同步发布器
     if (_imu_sync_method > imu_sync_method::NONE && _enable[GYRO] && _enable[ACCEL])
     {
         ROS_INFO("Start publisher IMU");
         _synced_imu_publisher = std::make_shared<SyncedImuPublisher>(_node_handle.advertise<sensor_msgs::Imu>("imu", 5));
-        _synced_imu_publisher->Enable(_hold_back_imu_for_frames);
+        _synced_imu_publisher->Enable(_hold_back_imu_for_frames);                                           //!@todo what is hold back imu for frames
     }
     else
     {
@@ -835,11 +853,11 @@ void BaseRealSenseNode::setupPublishers()
     }
     if (_enable[POSE])
     {
-        _imu_publishers[POSE] = _node_handle.advertise<nav_msgs::Odometry>("odom/sample", 100);
+        _imu_publishers[POSE] = _node_handle.advertise<nav_msgs::Odometry>("odom/sample", 100);             //pose 发布
     }
 
 
-    if (_enable[FISHEYE] &&
+    if (_enable[FISHEYE] &&                                                                                 //发布深度跟其它传感器的外参
         _enable[DEPTH])
     {
         _depth_to_other_extrinsics_publishers[FISHEYE] = _node_handle.advertise<Extrinsics>("extrinsics/depth_to_fisheye", 1, true);
@@ -910,13 +928,14 @@ void BaseRealSenseNode::publishAlignedDepthToOthers(rs2::frameset frames, const 
 
 void BaseRealSenseNode::enable_devices()
 {
+    printf("\n==========\n");
     for (auto& elem : IMAGE_STREAMS)
     {
         if (_enable[elem])
         {
             auto& sens = _sensors[elem];
-            auto profiles = sens.get_stream_profiles();
-            for (auto& profile : profiles)
+            auto profiles = sens.get_stream_profiles();                     //Stereo Module是作为一个sensor的
+            for (auto& profile : profiles)                                  //遍历该sensor支持的每一种模式，以判断用户设置的参数是否合理
             {
                 auto video_profile = profile.as<rs2::video_stream_profile>();
                 ROS_DEBUG_STREAM("Sensor profile: " <<
@@ -986,6 +1005,7 @@ void BaseRealSenseNode::enable_devices()
                 {
                     _fps[elem] = profile.fps();
                     _enabled_profiles[elem].push_back(profile);
+                    ROS_INFO_STREAM(STREAM_NAME(elem) << " stream is enabled - fps: " << _fps[elem]);
                     break;
                 }
             }
@@ -1175,13 +1195,13 @@ template <typename T> T lerp(const T &a, const T &b, const double t) {
 
 void BaseRealSenseNode::FillImuData_LinearInterpolation(const CimuData imu_data, std::deque<sensor_msgs::Imu>& imu_msgs)
 {
-    static std::deque<CimuData> _imu_history;
+    static std::deque<CimuData> _imu_history;                           //!@attention 默认加速度计的频率低于陀螺仪
     _imu_history.push_back(imu_data);
     stream_index_pair type(imu_data.m_type);
     imu_msgs.clear();
 
-    if ((type != ACCEL) || _imu_history.size() < 3)
-        return;
+    if ((type != ACCEL) || _imu_history.size() < 3)                 //buf设置成3是根据accel与gyro的频率而定的
+        return;                                                     //!@attention `type != ACCEL`这个条件设计的很巧妙
     
     std::deque<CimuData> gyros_data;
     CimuData accel0, accel1, crnt_imu;
@@ -1190,16 +1210,16 @@ void BaseRealSenseNode::FillImuData_LinearInterpolation(const CimuData imu_data,
     {
         crnt_imu = _imu_history.front();
         _imu_history.pop_front();
-        if (!accel0.is_set() && crnt_imu.m_type == ACCEL) 
+        if (!accel0.is_set() && crnt_imu.m_type == ACCEL)           //寻找第一个加速度计数据
         {
             accel0 = crnt_imu;
         } 
-        else if (accel0.is_set() && crnt_imu.m_type == ACCEL) 
+        else if (accel0.is_set() && crnt_imu.m_type == ACCEL)       //寻找第二个加速度计数据
         {
             accel1 = crnt_imu;
             const double dt = accel1.m_time - accel0.m_time;
 
-            while (gyros_data.size())
+            while (gyros_data.size())                               //根据两个加速度计数据之间陀螺仪数据的时间戳进行插值
             {
                 CimuData crnt_gyro = gyros_data.front();
                 gyros_data.pop_front();
@@ -1207,22 +1227,22 @@ void BaseRealSenseNode::FillImuData_LinearInterpolation(const CimuData imu_data,
                 CimuData crnt_accel(ACCEL, lerp(accel0.m_data, accel1.m_data, alpha), crnt_gyro.m_time);
                 imu_msgs.push_back(CreateUnitedMessage(crnt_accel, crnt_gyro));
             }
-            accel0 = accel1;
+            accel0 = accel1;                                        //更新第一个加速度计数据
         } 
         else if (accel0.is_set() && crnt_imu.m_time >= accel0.m_time && crnt_imu.m_type == GYRO)
         {
             gyros_data.push_back(crnt_imu);
         }
     }
-    _imu_history.push_back(crnt_imu);
+    _imu_history.push_back(crnt_imu);                               //!@attention 为了方便下次插值，将加速度计的消息再存回去
     return;
 }
 
 void BaseRealSenseNode::FillImuData_Copy(const CimuData imu_data, std::deque<sensor_msgs::Imu>& imu_msgs)
 {
     stream_index_pair type(imu_data.m_type);
-
-    static CimuData _accel_data(ACCEL, {0,0,0}, -1.0);
+                                                                //!@attention 默认加速度计的频率低于陀螺仪
+    static CimuData _accel_data(ACCEL, {0,0,0}, -1.0);          //设置成静态变量，用于插值
     if (ACCEL == type)
     {
         _accel_data = imu_data;
@@ -1264,14 +1284,17 @@ void BaseRealSenseNode::imu_callback_sync(rs2::frame frame, imu_sync_method sync
         setBaseTime(frame_time, RS2_TIMESTAMP_DOMAIN_SYSTEM_TIME == frame.get_frame_timestamp_domain());
     }
 
+    STAMP_DOMAIN_CHECK(rs2_stream_to_string(frame.get_profile().stream_type()));
+
     seq += 1;
-    double elapsed_camera_ms = (/*ms*/ frame_time - /*ms*/ _camera_time_base) / 1000.0;
+    //double elapsed_camera_s = (/*ms*/ frame_time - /*ms*/ _camera_time_base) / 1000.0;
+    double elapsed_camera_s = frame_time / 1000.0;
 
     if (0 != _synced_imu_publisher->getNumSubscribers())
     {
         auto crnt_reading = *(reinterpret_cast<const float3*>(frame.get_data()));
         Eigen::Vector3d v(crnt_reading.x, crnt_reading.y, crnt_reading.z);
-        CimuData imu_data(stream_index, v, elapsed_camera_ms);
+        CimuData imu_data(stream_index, v, elapsed_camera_s);
         std::deque<sensor_msgs::Imu> imu_msgs;
         switch (sync_method)
         {
@@ -1286,9 +1309,9 @@ void BaseRealSenseNode::imu_callback_sync(rs2::frame frame, imu_sync_method sync
         while (imu_msgs.size())
         {
             sensor_msgs::Imu imu_msg = imu_msgs.front();
-            ros::Time t(_ros_time_base.toSec() + imu_msg.header.stamp.toSec());
+            //ros::Time t(_ros_time_base.toSec() + imu_msg.header.stamp.toSec());
             imu_msg.header.seq = seq;
-            imu_msg.header.stamp = t;
+            //imu_msg.header.stamp = t;
             ImuMessage_AddDefaultValues(imu_msg);
             _synced_imu_publisher->Publish(imu_msg);
             ROS_DEBUG("Publish united %s stream", rs2_stream_to_string(frame.get_profile().stream_type()));
@@ -1308,6 +1331,8 @@ void BaseRealSenseNode::imu_callback(rs2::frame frame)
         setBaseTime(frame_time, RS2_TIMESTAMP_DOMAIN_SYSTEM_TIME == frame.get_frame_timestamp_domain());
     }
 
+    STAMP_DOMAIN_CHECK(rs2_stream_to_string(frame.get_profile().stream_type()));
+
     ROS_DEBUG("Frame arrived: stream: %s ; index: %d ; Timestamp Domain: %s",
                 rs2_stream_to_string(frame.get_profile().stream_type()),
                 frame.get_profile().stream_index(),
@@ -1316,8 +1341,9 @@ void BaseRealSenseNode::imu_callback(rs2::frame frame)
     auto stream_index = (stream == GYRO.first)?GYRO:ACCEL;
     if (0 != _imu_publishers[stream_index].getNumSubscribers())
     {
-        double elapsed_camera_ms = (/*ms*/ frame_time - /*ms*/ _camera_time_base) / 1000.0;
-        ros::Time t(_ros_time_base.toSec() + elapsed_camera_ms);
+        //double elapsed_camera_ms = (/*ms*/ frame_time - /*ms*/ _camera_time_base) / 1000.0;
+        //ros::Time t(_ros_time_base.toSec() + elapsed_camera_ms);
+        ros::Time t(frame_time / 1000.0);
 
         auto imu_msg = sensor_msgs::Imu();
         ImuMessage_AddDefaultValues(imu_msg);
@@ -1353,14 +1379,17 @@ void BaseRealSenseNode::pose_callback(rs2::frame frame)
         setBaseTime(frame_time, RS2_TIMESTAMP_DOMAIN_SYSTEM_TIME == frame.get_frame_timestamp_domain());
     }
 
+    STAMP_DOMAIN_CHECK(rs2_stream_to_string(frame.get_profile().stream_type()));
+
     ROS_DEBUG("Frame arrived: stream: %s ; index: %d ; Timestamp Domain: %s",
                 rs2_stream_to_string(frame.get_profile().stream_type()),
                 frame.get_profile().stream_index(),
                 rs2_timestamp_domain_to_string(frame.get_frame_timestamp_domain()));
     const auto& stream_index(POSE);
     rs2_pose pose = frame.as<rs2::pose_frame>().get_pose_data();
-    double elapsed_camera_ms = (/*ms*/ frame_time - /*ms*/ _camera_time_base) / 1000.0;
-    ros::Time t(_ros_time_base.toSec() + elapsed_camera_ms);
+//    double elapsed_camera_ms = (/*ms*/ frame_time - /*ms*/ _camera_time_base) / 1000.0;
+//    ros::Time t(_ros_time_base.toSec() + elapsed_camera_ms);
+    ros::Time t(frame_time / 1000.0);
 
     geometry_msgs::PoseStamped pose_msg;
     pose_msg.pose.position.x = -pose.translation.z;
@@ -1439,7 +1468,7 @@ void BaseRealSenseNode::pose_callback(rs2::frame frame)
 
 void BaseRealSenseNode::frame_callback(rs2::frame frame)
 {
-    _synced_imu_publisher->Pause();
+    _synced_imu_publisher->Pause();                         //!@attention 停止IMU发布
     
     try{
         double frame_time = frame.get_timestamp();
@@ -1453,6 +1482,8 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
             setBaseTime(frame_time, RS2_TIMESTAMP_DOMAIN_SYSTEM_TIME == frame.get_frame_timestamp_domain());
         }
 
+        STAMP_DOMAIN_CHECK(rs2_stream_to_string(frame.get_profile().stream_type()));
+
         ros::Time t;
         if (_sync_frames)
         {
@@ -1460,7 +1491,8 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
         }
         else
         {
-            t = ros::Time(_ros_time_base.toSec()+ (/*ms*/ frame_time - /*ms*/ _camera_time_base) / /*ms to seconds*/ 1000);
+            // t = ros::Time(_ros_time_base.toSec()+ (/*ms*/ frame_time - /*ms*/ _camera_time_base) / /*ms to seconds*/ 1000);
+            t = ros::Time(frame_time / 1000.0);
         }
 
         if (frame.is<rs2::frameset>())
@@ -1633,7 +1665,7 @@ void BaseRealSenseNode::multiple_message_callback(rs2::frame frame, imu_sync_met
 
 void BaseRealSenseNode::setBaseTime(double frame_time, bool warn_no_metadata)
 {
-    ROS_WARN_COND(warn_no_metadata, "Frame metadata isn't available! (frame_timestamp_domain = RS2_TIMESTAMP_DOMAIN_SYSTEM_TIME)");
+    ROS_ERROR_COND(warn_no_metadata, "Frame metadata isn't available! (frame_timestamp_domain == RS2_TIMESTAMP_DOMAIN_SYSTEM_TIME)");
 
     _ros_time_base = ros::Time::now();
     _camera_time_base = frame_time;
@@ -1641,12 +1673,13 @@ void BaseRealSenseNode::setBaseTime(double frame_time, bool warn_no_metadata)
 
 void BaseRealSenseNode::setupStreams()
 {
+    printf("\n==========\n");
 	ROS_INFO("setupStreams...");
     try{
 		// Publish image stream info
         for (auto& profiles : _enabled_profiles)
         {
-            for (auto& profile : profiles.second)
+            for (auto& profile : profiles.second)                                   //!@todo 一个stream怎么会出现多个profile吗？难道同一个stream要传两种分辨率上来？
             {
                 if (profile.is<rs2::video_stream_profile>())
                 {
@@ -1661,10 +1694,10 @@ void BaseRealSenseNode::setupStreams()
         std::map<std::string, rs2::sensor> active_sensors;
         for (const std::pair<stream_index_pair, std::vector<rs2::stream_profile>>& profile : _enabled_profiles)
         {
-            std::string module_name = _sensors[profile.first].get_info(RS2_CAMERA_INFO_NAME);
-            ROS_INFO_STREAM("insert " << rs2_stream_to_string(profile.second.begin()->stream_type())
+            std::string module_name = _sensors[profile.first].get_info(RS2_CAMERA_INFO_NAME);           //module_name是模组名，比如Stereo Module、color
+            ROS_INFO_STREAM("insert " << rs2_stream_to_string(profile.second.begin()->stream_type())    //获取第一个，应该只有一个吧
               << " to " << module_name);
-            profiles[module_name].insert(profiles[module_name].begin(),
+            profiles[module_name].insert(profiles[module_name].begin(),                                 //模组名+profile，比如，Stereo Module包含：Depth、Infrared1、Infrared2
                                             profile.second.begin(),
                                             profile.second.end());
             active_sensors[module_name] = _sensors[profile.first];
@@ -1674,11 +1707,11 @@ void BaseRealSenseNode::setupStreams()
         {
             std::string module_name = sensor_profile.first;
             rs2::sensor sensor = active_sensors[module_name];
-            sensor.open(sensor_profile.second);
-            sensor.start(_sensors_callback[module_name]);
+            sensor.open(sensor_profile.second);                                                         //一次性打开sensor的多个profile，见上
+            sensor.start(_sensors_callback[module_name]);                                               //打开回调
             if (sensor.is<rs2::depth_sensor>())
             {
-                _depth_scale_meters = sensor.as<rs2::depth_sensor>().get_depth_scale();
+                _depth_scale_meters = sensor.as<rs2::depth_sensor>().get_depth_scale();                 //!@todo what is depth scale meters
             }
         }
     }
@@ -1756,7 +1789,7 @@ void BaseRealSenseNode::updateStreamCalibData(const rs2::video_stream_profile& v
     {
         for (auto& profiles : _enabled_profiles)
         {
-            for (auto& profile : profiles.second)
+            for (auto& profile : profiles.second)               //depth_aligned camera info
             {
                 auto video_profile = profile.as<rs2::video_stream_profile>();
                 stream_index_pair stream_index{video_profile.stream_type(), video_profile.stream_index()};

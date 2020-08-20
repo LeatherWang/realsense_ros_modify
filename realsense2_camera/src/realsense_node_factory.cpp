@@ -140,7 +140,7 @@ void RealSenseNodeFactory::getDevice(rs2::device_list list)
 				{
 					std::smatch match_results;
 					std::regex device_type_regex(_device_type.c_str(), std::regex::icase);
-					found_device_type = std::regex_search(name, match_results, device_type_regex);
+                    found_device_type = std::regex_search(name, match_results, device_type_regex);  //使用正则表达式判断是否找到所需要的相机
 				}
 
 				if ((_serial_no.empty() || sn == _serial_no) && (_usb_port_id.empty() || port_id == _usb_port_id) && found_device_type)
@@ -196,7 +196,7 @@ void RealSenseNodeFactory::getDevice(rs2::device_list list)
 		try
 		{
 			ROS_INFO("Resetting device...");
-			_device.hardware_reset();
+            _device.hardware_reset();                       //硬件reset
 			_device = rs2::device();
 			
 		}

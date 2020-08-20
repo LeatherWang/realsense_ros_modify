@@ -1,0 +1,85 @@
+
+<launch>
+  <arg name="device_type_camera1"    	default="t265"/>
+  <arg name="device_type_camera2"       default="l515"/>
+  <arg name="serial_no_camera1"    	default=""/>
+  <arg name="serial_no_camera2"    	default=""/>
+  <arg name="camera1"              	default="t265"/>
+  <arg name="camera2"                   default="l515"/>
+  <arg name="tf_prefix_camera1"         default="$(arg camera1)"/>
+  <arg name="tf_prefix_camera2"         default="$(arg camera2)"/>
+  <arg name="initial_reset"             default="false"/>
+  <arg name="external_manager"          default="false"/>
+  <arg name="manager"                   default="realsense2_camera_manager"/>
+  <arg name="enable_fisheye"            default="true"/>
+
+  <arg name="color_width"               default="640"/>
+  <arg name="color_height"              default="480"/>
+  <arg name="enable_depth"              default="true"/>
+  <arg name="depth_width"               default="640"/>
+  <arg name="depth_height"              default="480"/>
+  <arg name="clip_distance"             default="-2"/>
+  <arg name="topic_odom_in"             default=""/>
+  <arg name="calib_odom_file"           default=""/>
+
+  <arg name="l515_depth_width"          default="640"/>
+  <arg name="l515_depth_height"         default="480"/>
+  <arg name="l515_enable_depth"         default="true"/>
+  <arg name="l515_color_width"          default="1280"/>
+  <arg name="l515_color_height"         default="720"/>
+  <arg name="l515_enable_color"         default="true"/>
+  <arg name="l515_depth_fps"            default="30"/>
+  <arg name="l515_color_fps"            default="30"/>
+  <arg name="l515_align_depth"          default="true"/>
+
+  
+  <group ns="$(arg camera1)">
+    <include file="$(find realsense2_camera)/launch/includes/nodelet.launch.xml">
+      <arg name="device_type"           value="$(arg device_type_camera1)"/>
+      <arg name="serial_no"             value="$(arg serial_no_camera1)"/>
+      <arg name="tf_prefix"         		value="$(arg tf_prefix_camera1)"/>
+      <arg name="initial_reset"         value="$(arg initial_reset)"/>
+
+      <arg name="enable_fisheye1"       value="$(arg enable_fisheye)"/>
+      <arg name="enable_fisheye2"       value="$(arg enable_fisheye)"/>
+      
+      <arg name="gyro_fps"            default="200"/>
+      <arg name="accel_fps"           default="62"/>
+      <arg name="enable_gyro"         default="true"/>
+      <arg name="enable_accel"        default="true"/>
+      <arg name="enable_pose"         default="true"/>
+      <arg name="unite_imu_method"      value="linear_interpolation"/> <!-- add by leather -->
+
+      <arg name="topic_odom_in"         value="$(arg topic_odom_in)"/>
+      <arg name="calib_odom_file"       value="$(arg calib_odom_file)"/>
+    </include>
+  </group>
+
+  <group ns="$(arg camera2)">
+    <include file="$(find realsense2_camera)/launch/includes/nodelet.launch.xml">
+      <arg name="device_type"           value="$(arg device_type_camera2)"/>
+      <arg name="tf_prefix"             value="$(arg tf_prefix_camera2)"/>
+
+      <arg name="depth_width"           value="$(arg l515_depth_width)"/>
+      <arg name="depth_height"          value="$(arg l515_depth_height)"/>
+      <arg name="enable_depth"          value="$(arg l515_enable_depth)"/>
+
+      <arg name="color_width"           value="$(arg l515_color_width)"/>
+      <arg name="color_height"          value="$(arg l515_color_height)"/> -->
+      <arg name="enable_color"          value="$(arg l515_enable_color)"/>
+
+      <arg name="depth_fps"             value="$(arg l515_depth_fps)"/>
+      <arg name="color_fps"             value="$(arg l515_color_fps)"/>
+      <param name="align_depth"         type="bool" value="$(arg l515_align_depth)"/>
+
+      <arg name="gyro_fps"            default="200"/>
+      <arg name="accel_fps"           default="200"/>
+      <arg name="enable_gyro"         default="true"/>
+      <arg name="enable_accel"        default="true"/>
+      <arg name="enable_pose"         default="true"/>
+      <arg name="unite_imu_method"    value="linear_interpolation"/> <!-- add by leather -->
+
+    </include>
+  </group>
+    <node pkg="tf" type="static_transform_publisher" name="t265_to_l515" args="0 0 0 -0.703759 0.710346 0.00924681 0.00678086 /t265_link /l515_link 100"/>
+</launch>
