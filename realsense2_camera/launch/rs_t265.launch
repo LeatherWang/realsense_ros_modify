@@ -9,7 +9,7 @@ https://github.com/IntelRealSense/librealsense/blob/master/third-party/libtm/lib
   <arg name="usb_port_id"         default=""/>
   <arg name="device_type"         default="t265"/>
   <arg name="json_file_path"      default=""/>
-  <arg name="camera"              default="camera"/>
+  <arg name="camera"              default="t265"/>
   <arg name="tf_prefix"           default="$(arg camera)"/>
 
   <arg name="fisheye_width"       default="848"/> 
@@ -29,11 +29,14 @@ https://github.com/IntelRealSense/librealsense/blob/master/third-party/libtm/lib
 
   <arg name="linear_accel_cov"      default="0.01"/>
   <arg name="initial_reset"         default="false"/>
-  <arg name="unite_imu_method"      default=""/>
+  <arg name="unite_imu_method"      default="linear_interpolation"/>
 
   <arg name="publish_odom_tf"     default="true"/>
   
   <group ns="$(arg camera)">
+    <param name="tracking_module/enable_auto_exposure"   type="bool"  value="false"/> 
+    <param name="tracking_module/exposure"   type="double"  value="10000"/>
+    <param name="tracking_module/gain"   type="double"  value="5"/>
     <include file="$(find realsense2_camera)/launch/includes/nodelet.launch.xml">
       <arg name="tf_prefix"                value="$(arg tf_prefix)"/>
       <arg name="serial_no"                value="$(arg serial_no)"/>

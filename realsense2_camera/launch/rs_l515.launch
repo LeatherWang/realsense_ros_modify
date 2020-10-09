@@ -20,7 +20,9 @@
   <arg name="depth_fps"                 default="30"/>
   <arg name="color_fps"                 default="30"/>
 
-  <!-- add by leather -->
+<!-- ====================================== -->
+<!-- ============add by leather============ -->
+<!-- ====================================== -->
   <param name="$(arg device_type_camera)/l500_depth_sensor/global_time_enabled" type="bool" value="true"/>
   <param name="$(arg device_type_camera)/rgb_camera/global_time_enabled" type="bool" value="true"/>
   <param name="$(arg device_type_camera)/motion_module/global_time_enabled" type="bool" value="true"/>

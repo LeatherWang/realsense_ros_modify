@@ -15,10 +15,10 @@ using namespace ddynamic_reconfigure;
 #define ALIGNED_DEPTH_TO_FRAME_ID(sip) (static_cast<std::ostringstream&&>(std::ostringstream() << "camera_aligned_depth_to_" << STREAM_NAME(sip) << "_frame")).str()
 
 #define STAMP_DOMAIN_CHECK(frame_name)                                                              \
-    static rs2_timestamp_domain last_domain = frame.get_frame_timestamp_domain();                   \
     ROS_WARN_STREAM_ONCE(frame_name << " stamp domain: "                                            \
                          << rs2_timestamp_domain_to_string(frame.get_frame_timestamp_domain()));    \
                                                                                                     \
+    static rs2_timestamp_domain last_domain = frame.get_frame_timestamp_domain();                   \
     if(last_domain != frame.get_frame_timestamp_domain())                                           \
         ROS_ERROR_STREAM_THROTTLE(0.5, frame_name << " stamp domain have changed, last is: "        \
                          << rs2_timestamp_domain_to_string(last_domain)                             \
@@ -423,6 +423,7 @@ void BaseRealSenseNode::registerDynamicOption(ros::NodeHandle& nh, rs2::options 
         {
             continue;
         }
+
         if (is_checkbox(sensor, option))
         {
             auto option_value = bool(sensor.get_option(option));        //先获取默认值
@@ -453,6 +454,10 @@ void BaseRealSenseNode::registerDynamicOption(ros::NodeHandle& nh, rs2::options 
                 }
                 else
                 {
+                    if(option == rs2_option::RS2_OPTION_EXPOSURE) {
+                        sensor.set_option(rs2_option::RS2_OPTION_ENABLE_AUTO_EXPOSURE, false);
+                        ROS_WARN("Disable auto exposure");
+                    }
                     sensor.set_option(option, option_value);
                 }
             }
