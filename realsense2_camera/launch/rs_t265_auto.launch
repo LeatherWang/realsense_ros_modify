@@ -34,9 +34,6 @@ https://github.com/IntelRealSense/librealsense/blob/master/third-party/libtm/lib
   <arg name="publish_odom_tf"     default="true"/>
   
   <group ns="$(arg camera)/$(arg serial_no)">
-    <param name="tracking_module/enable_auto_exposure"   type="bool"  value="false"/> 
-    <param name="tracking_module/exposure"   type="double"  value="5000"/>
-    <param name="tracking_module/gain"   type="double"  value="5"/>
     <include file="$(find realsense2_camera)/launch/includes/nodelet.launch.xml">
       <arg name="tf_prefix"                value="$(arg tf_prefix)"/>
       <arg name="serial_no"                value="$(arg serial_no)"/>
